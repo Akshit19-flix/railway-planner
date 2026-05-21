@@ -45,96 +45,91 @@ CLASS_ORDER  = ["1A", "2A", "3A", "CC", "SL", "2S", "3E"]
 
 # ── Parsing helpers ────────────────────────────────────────────────────────────
 
-def _clean(v: str) -> str:
-    v = v.strip().replace("\xa0", "").strip()
-    if v in ("x", "", "Departed"):
-        return "—"
-    return v
+# Class-bits string (parts[14] in data-train) maps bit positions to class names.
+# Observed from erail: "000100000010000" → positions 3=CC, 10=SL (0-indexed from left)
+# Mapping confirmed by cross-referencing with known trains.
+_CLASS_BIT_MAP = {
+    0:  "1A",
+    1:  "2A",
+    2:  "3A",
+    3:  "CC",
+    4:  "SL",
+    5:  "2S",
+    6:  "3E",
+}
 
 
-def _html_to_text(html: str) -> str:
+def _parse_schedule_html(html: str) -> list[dict]:
+    """
+    Parse erail schedule page using data-train attributes on OneTrain divs.
+
+    data-train format (underscore-separated, 19 parts):
+      0  train_number
+      1  train_name
+      2  from_code
+      3  to_code
+      4  date (DD-Mon-YYYY)
+      5  departure time
+      6  arrival date
+      7  arrival time
+      8  duration
+      9  distance
+      10 halt at from
+      11 halt at to
+      12 internal id
+      13 runs_on  — 7-char binary string, index 0=Mon … 6=Sun  ("1011111")
+      14 class_bits — 15-char binary string, positions per _CLASS_BIT_MAP
+      15 train type
+      16 (quota / misc)
+      17 scheduled dep
+      18 (empty)
+    """
     soup = BeautifulSoup(html, "html.parser")
-    lines = []
-    for tr in soup.find_all("tr"):
-        cells = tr.find_all(["td", "th"])
-        if cells:
-            lines.append("\t".join(c.get_text(" ", strip=True) for c in cells))
-    for tag in soup.find_all(["h1", "h2", "h3", "p"]):
-        if not tag.find("table"):
-            text = tag.get_text(" ", strip=True)
-            if text:
-                lines.append(text)
-    return "\n".join(lines)
+    divs = soup.find_all("div", class_="OneTrain")
+    trains: list[dict] = []
+    seen: set[str] = set()
 
-
-def _parse_schedule(body_text: str) -> list[dict]:
-    trains = []
-    seen: set[str] = set()          # deduplicate by train number
-    lines = [l for l in body_text.splitlines() if l.strip()]
-    header_idx = -1
-    class_start = 17
-    for i, line in enumerate(lines):
-        if re.search(r'\bM\b.*\bT\b.*\bW\b.*\bT\b.*\bF\b.*\bS\b.*\bS\b', line):
-            header_idx = i
-            parts = re.split(r'\t+', line)
-            for j, p in enumerate(parts):
-                if p.strip() == "1A":
-                    class_start = j
-                    break
-            break
-    if header_idx == -1:
-        return _fallback_parse(body_text)
-    for line in lines[header_idx + 1:]:
-        parts = re.split(r'\t+', line.strip())
-        if not parts or not re.match(r'^\d{4,5}$', parts[0].strip()):
+    for div in divs:
+        raw = div.get("data-train", "")
+        parts = raw.split("_")
+        if len(parts) < 14:
             continue
         train_num = parts[0].strip()
+        if not re.match(r"^\d{4,5}$", train_num):
+            continue
         if train_num in seen:
             continue
         seen.add(train_num)
-        try:
-            day_values = parts[10:17] if len(parts) > 16 else []
-            runs_on = [DAY_COLUMNS[i] for i, v in enumerate(day_values) if v.strip().upper() == "Y"]
-            # If we couldn't read day columns, assume all days rather than
-            # leaving empty (empty → build() defaults to all days anyway,
-            # but explicit is safer and avoids the conditional in build)
-            if not runs_on:
-                runs_on = DAY_COLUMNS[:]
-            avail = {}
-            for ci, cls in enumerate(CLASS_ORDER):
-                col = class_start + ci
-                avail[cls] = _clean(parts[col]) if col < len(parts) else "—"
-            classes = [cls for cls in CLASS_ORDER if avail[cls] != "—"]
-            trains.append({
-                "train_number": train_num,
-                "train_name":   parts[1].strip() if len(parts) > 1 else "",
-                "from_station": parts[2].strip() if len(parts) > 2 else "",
-                "departure":    parts[3].strip() if len(parts) > 3 else "",
-                "to_station":   parts[5].strip() if len(parts) > 5 else "",
-                "arrival":      parts[6].strip() if len(parts) > 6 else "",
-                "duration":     parts[8].strip() if len(parts) > 8 else "",
-                "runs_on":      runs_on,
-                "classes":      classes,
-                "availability": avail,
-            })
-        except (IndexError, ValueError):
-            continue
-    return trains
 
+        # Running days from 7-bit string at index 13
+        day_bits = parts[13].strip() if len(parts) > 13 else ""
+        if len(day_bits) == 7:
+            runs_on = [DAY_COLUMNS[i] for i, b in enumerate(day_bits) if b == "1"]
+        else:
+            runs_on = DAY_COLUMNS[:]   # unknown → assume all days
 
-def _fallback_parse(body_text: str) -> list[dict]:
-    trains, seen = [], set()
-    for m in re.finditer(r'(\d{5})\s+([A-Z][A-Z0-9 \(\)]{3,50})', body_text):
-        num, name = m.group(1), m.group(2).strip()
-        if num not in seen and len(name) > 3:
-            seen.add(num)
-            trains.append({
-                "train_number": num, "train_name": name[:50],
-                "from_station": "", "departure": "",
-                "to_station": "", "arrival": "", "duration": "",
-                "runs_on": DAY_COLUMNS, "classes": [],
-                "availability": {cls: "—" for cls in CLASS_ORDER},
-            })
+        # Classes from 15-bit string at index 14
+        class_bits = parts[14].strip() if len(parts) > 14 else ""
+        classes = [
+            CLASS_ORDER[ci] for ci, cls in _CLASS_BIT_MAP.items()
+            if ci < len(class_bits) and class_bits[ci] == "1"
+            and cls in CLASS_ORDER
+        ]
+        avail = {cls: "—" for cls in CLASS_ORDER}
+
+        trains.append({
+            "train_number": train_num,
+            "train_name":   parts[1].strip() if len(parts) > 1 else "",
+            "from_station": parts[2].strip() if len(parts) > 2 else "",
+            "departure":    parts[5].strip() if len(parts) > 5 else "",
+            "to_station":   parts[3].strip() if len(parts) > 3 else "",
+            "arrival":      parts[7].strip() if len(parts) > 7 else "",
+            "duration":     parts[8].strip() if len(parts) > 8 else "",
+            "runs_on":      runs_on if runs_on else DAY_COLUMNS[:],
+            "classes":      classes,
+            "availability": avail,
+        })
+
     return trains
 
 
@@ -178,8 +173,7 @@ async def _scrape_schedule_async(from_code: str, to_code: str) -> list[dict]:
     url = SCHEDULE_URL.format(from_code=from_code.upper(), to_code=to_code.upper())
     async with httpx.AsyncClient(headers=HEADERS, follow_redirects=True, timeout=30) as c:
         r = await c.get(url)
-    body = _html_to_text(r.text)
-    return _parse_schedule(body)
+    return _parse_schedule_html(r.text)
 
 
 # ── Availability scraper — s.erail.in batch API ────────────────────────────────
