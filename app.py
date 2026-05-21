@@ -194,20 +194,40 @@ with st.sidebar:
     st.markdown("### Search")
     origin_input      = st.text_input("From Station", placeholder="e.g. New Delhi / NDLS")
     destination_input = st.text_input("To Station",   placeholder="e.g. Mumbai Central / BCT")
-    start_date = st.date_input(
+    start_date_raw = st.date_input(
         "From Date", value=date.today() + timedelta(days=1),
         min_value=date.today(), max_value=date.today() + timedelta(days=120),
     )
-    end_date = st.date_input(
-        "To Date", value=date.today() + timedelta(days=30),
-        min_value=date.today() + timedelta(days=1),
-        max_value=date.today() + timedelta(days=120),
+    # Snap to Monday of the selected week
+    start_date = start_date_raw - timedelta(days=start_date_raw.weekday())
+
+    duration_label = st.selectbox(
+        "Duration",
+        ["2 weeks", "3 weeks", "4 weeks", "6 weeks", "8 weeks", "10 weeks", "12 weeks", "16 weeks"],
+        index=2,
     )
+    n_weeks = int(duration_label.split()[0])
+    end_date = start_date + timedelta(weeks=n_weeks) - timedelta(days=1)
+
+    st.caption(
+        f"Range: **{start_date.strftime('%d %b %Y')} (Mon)** → "
+        f"**{end_date.strftime('%d %b %Y')} (Sun)** · {n_weeks * 7} days"
+    )
+
     fetch_avail = st.checkbox(
         "Fetch live seat availability", value=True,
         help="Gets real seat counts per date (~30–60 s with HTTP, ~2 min with browser fallback).",
     )
     run_button = st.button("Search Trains", use_container_width=True, type="primary")
+    st.markdown("---")
+    st.markdown("**Data accuracy note**")
+    st.caption(
+        "ℹ️ erail.in caches IRCTC General Quota data and may be a few hours stale. "
+        "Values may differ from IRCTC.co.in due to:\n\n"
+        "• **Cache lag** — erail refreshes periodically, not in real-time\n\n"
+        "• **Quota type** — erail shows General quota; Tatkal/other quotas differ\n\n"
+        "• **Boarding point** — availability at train origin may differ from your station"
+    )
     st.markdown("---")
     st.markdown("**Reading seat values**")
     st.caption(
@@ -286,21 +306,48 @@ def _sug_card(icon: str, title: str, body: str, level: str) -> str:
 
 _PLOTLY_LAYOUT = dict(
     paper_bgcolor=FX_WHITE, plot_bgcolor=FX_WHITE,
-    font=dict(family="Segoe UI, Arial", color=FX_GREY, size=12),
-    margin=dict(l=10, r=10, t=48, b=10),
-    legend=dict(bgcolor="rgba(0,0,0,0)", borderwidth=0),
+    font=dict(family="Segoe UI, Arial", color=FX_GREY, size=13),
+    margin=dict(l=10, r=10, t=72, b=10),
+    legend=dict(bgcolor="rgba(0,0,0,0)", borderwidth=0,
+                orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+    hoverlabel=dict(bgcolor=FX_WHITE, bordercolor="#CCCCCC",
+                    font=dict(size=13, color=FX_DARK, family="Segoe UI, Arial")),
 )
-_GRID = dict(showgrid=True, gridcolor="#F0F0F0", zeroline=False)
-_NO_GRID = dict(showgrid=False, zeroline=False)
+_GRID = dict(
+    showgrid=True, gridcolor="rgba(0,0,0,0.06)",
+    zeroline=True, zerolinecolor="rgba(0,0,0,0.15)", zerolinewidth=1,
+    showline=False, tickfont=dict(size=12, color=FX_DARK),
+)
+_NO_GRID = dict(showgrid=False, zeroline=False,
+                showline=False, tickfont=dict(size=12, color=FX_DARK))
 
 DEMAND_COLORS = {"High": FX_RED, "Medium": FX_AMBER, "Low": FX_GREEN}
 
 
+def _ymax(values: list, factor: float = 1.3) -> float:
+    m = max((v for v in values if v is not None), default=0)
+    return max(m * factor, 10)
+
+
+def _chart_title(text: str) -> dict:
+    return dict(text=f"<b>{text}</b>", font=dict(size=15, color=FX_DARK),
+                x=0.01, xanchor="left")
+
+
+def _subtitle(text: str) -> dict:
+    return dict(
+        text=text, xref="paper", yref="paper",
+        x=0.01, y=1.05, showarrow=False,
+        font=dict(size=11, color=FX_MID, family="Segoe UI, Arial"),
+        xanchor="left", yanchor="bottom",
+    )
+
+
 def _chart_weekday_combo(analysis: list[dict]) -> go.Figure:
-    days   = [r["day"] for r in analysis]
-    trains = [r["avg_trains"] for r in analysis]
-    occ    = [r["avg_occupancy"] for r in analysis]
-    colors = [DEMAND_COLORS.get(r["demand_level"], FX_GREEN) for r in analysis]
+    days    = [r["day"] for r in analysis]
+    trains  = [r["avg_trains"] for r in analysis]
+    occ     = [r["avg_occupancy"] for r in analysis]
+    colors  = [DEMAND_COLORS.get(r["demand_level"], FX_GREEN) for r in analysis]
     has_occ = any(o is not None for o in occ)
 
     fig = make_subplots(specs=[[{"secondary_y": True}]])
@@ -309,12 +356,11 @@ def _chart_weekday_combo(analysis: list[dict]) -> go.Figure:
         x=days, y=trains,
         name="Avg Trains / Day",
         marker_color=colors,
-        marker_line_color=FX_WHITE,
-        marker_line_width=1.5,
-        text=[f"{v:.0f}" for v in trains],
+        marker_line_color=FX_WHITE, marker_line_width=2,
+        text=[f"<b>{v:.0f}</b>" for v in trains],
         textposition="outside",
-        textfont=dict(size=11, color=FX_DARK, family="Segoe UI"),
-        hovertemplate="%{x}<br><b>%{y:.1f} trains</b><extra></extra>",
+        textfont=dict(size=13, color=FX_DARK, family="Segoe UI"),
+        hovertemplate="<b>%{x}</b><br>%{y:.1f} avg trains<extra></extra>",
     ), secondary_y=False)
 
     if has_occ:
@@ -324,25 +370,27 @@ def _chart_weekday_combo(analysis: list[dict]) -> go.Figure:
             name="Avg Occupancy %",
             mode="lines+markers+text",
             line=dict(color=FX_DARK, width=2.5),
-            marker=dict(size=9, color=FX_DARK, symbol="circle",
+            marker=dict(size=10, color=FX_DARK, symbol="circle",
                         line=dict(width=2, color=FX_WHITE)),
-            text=[f"{v}%" if occ[i] is not None else "" for i, v in enumerate(occ_vals)],
+            text=[f"<b>{v}%</b>" if occ[i] is not None else "" for i, v in enumerate(occ_vals)],
             textposition="top center",
-            textfont=dict(size=10, color=FX_DARK, family="Segoe UI"),
-            hovertemplate="%{x}<br><b>%{y}% occupancy</b><extra></extra>",
+            textfont=dict(size=12, color=FX_DARK, family="Segoe UI"),
+            hovertemplate="<b>%{x}</b><br>%{y}% occupancy<extra></extra>",
         ), secondary_y=True)
 
-        fig.add_hline(y=70, line_dash="dot", line_color=FX_RED,   line_width=1,
-                      annotation_text="High", annotation_font_size=9,
+        fig.add_hline(y=70, line_dash="dot", line_color=FX_RED,   line_width=1.2,
+                      annotation_text="High ≥70%", annotation_font_size=10,
                       annotation_font_color=FX_RED, secondary_y=True)
-        fig.add_hline(y=40, line_dash="dot", line_color=FX_AMBER, line_width=1,
-                      annotation_text="Med",  annotation_font_size=9,
+        fig.add_hline(y=40, line_dash="dot", line_color=FX_AMBER, line_width=1.2,
+                      annotation_text="Medium ≥40%", annotation_font_size=10,
                       annotation_font_color=FX_AMBER, secondary_y=True)
 
     fig.update_layout(
-        title=dict(text="Weekday Demand — Trains & Occupancy", font=dict(size=14, color=FX_DARK)),
-        bargap=0.3,
-        yaxis=dict(title="Avg Trains / Day", **_GRID),
+        title=_chart_title("Weekday Demand — Trains & Occupancy"),
+        annotations=[_subtitle("Average trains per day of week · Occupancy % where available")],
+        bargap=0.35,
+        xaxis=dict(showgrid=False, showline=False, tickfont=dict(size=13, color=FX_DARK)),
+        yaxis=dict(title="Avg Trains / Day", range=[0, _ymax(trains)], **_GRID),
         yaxis2=dict(title="Avg Occupancy %", range=[0, 130], **_GRID),
         **_PLOTLY_LAYOUT,
     )
@@ -362,10 +410,11 @@ def _chart_weekly(weekly: list[dict]) -> go.Figure:
         x=labels, y=trains,
         name="Total Train-Day Slots",
         marker_color=colors,
-        marker_line_color=FX_WHITE, marker_line_width=1.5,
-        text=trains, textposition="outside",
-        textfont=dict(size=11, color=FX_DARK),
-        hovertemplate="%{x}<br><b>%{y} train-days</b><extra></extra>",
+        marker_line_color=FX_WHITE, marker_line_width=2,
+        text=[f"<b>{v}</b>" for v in trains],
+        textposition="outside",
+        textfont=dict(size=13, color=FX_DARK),
+        hovertemplate="<b>%{x}</b><br>%{y} train-day slots<extra></extra>",
     ), secondary_y=False)
 
     if has_occ:
@@ -375,18 +424,20 @@ def _chart_weekly(weekly: list[dict]) -> go.Figure:
             name="Avg Occupancy %",
             mode="lines+markers+text",
             line=dict(color=FX_DARK, width=2.5),
-            marker=dict(size=9, color=FX_DARK, line=dict(width=2, color=FX_WHITE)),
-            text=[f"{v}%" if occ[i] is not None else "" for i, v in enumerate(occ_vals)],
+            marker=dict(size=10, color=FX_DARK, line=dict(width=2, color=FX_WHITE)),
+            text=[f"<b>{v}%</b>" if occ[i] is not None else "" for i, v in enumerate(occ_vals)],
             textposition="top center",
-            textfont=dict(size=10, color=FX_DARK),
-            hovertemplate="%{x}<br><b>%{y}% occupancy</b><extra></extra>",
+            textfont=dict(size=12, color=FX_DARK),
+            hovertemplate="<b>%{x}</b><br>%{y}% avg occupancy<extra></extra>",
         ), secondary_y=True)
 
     fig.update_layout(
-        title=dict(text="Week-by-Week Demand", font=dict(size=14, color=FX_DARK)),
+        title=_chart_title("Week-by-Week Demand"),
+        annotations=[_subtitle("Total train-day slots per week · colour = demand level")],
         bargap=0.35,
-        xaxis=dict(tickangle=-20, **_GRID),
-        yaxis=dict(title="Total Train-Day Slots", **_GRID),
+        xaxis=dict(tickangle=-20, showgrid=False, showline=False,
+                   tickfont=dict(size=12, color=FX_DARK)),
+        yaxis=dict(title="Total Train-Day Slots", range=[0, _ymax(trains)], **_GRID),
         yaxis2=dict(title="Avg Occupancy %", range=[0, 130], **_GRID),
         **_PLOTLY_LAYOUT,
     )
@@ -420,35 +471,37 @@ def _chart_heatmap(results: AggregatedResults, cls: str, max_trains: int) -> go.
         Z_text.append(row_t)
 
     colorscale = [
-        [0.0,  FX_GREEN],
-        [0.45, "#B5D900"],
-        [0.65, FX_AMBER],
-        [1.0,  FX_RED],
+        [0.00, "#1B5E20"],
+        [0.35, "#66BB6A"],
+        [0.55, "#FFF176"],
+        [0.75, FX_AMBER],
+        [1.00, FX_RED],
     ]
 
     fig = go.Figure(go.Heatmap(
         z=Z, x=date_labels, y=row_labels,
         text=Z_text, texttemplate="%{text}",
-        textfont=dict(size=8, family="Segoe UI"),
+        textfont=dict(size=9, family="Segoe UI", color="#333333"),
         colorscale=colorscale,
         zmin=0, zmax=1,
         zmid=0.5,
         colorbar=dict(
-            title=dict(text="Load", side="right"),
+            title=dict(text="Load", font=dict(size=12, color=FX_DARK), side="right"),
             tickvals=[0, 0.5, 1],
             ticktext=["Free", "Limited", "Full"],
+            tickfont=dict(size=11, color=FX_DARK),
             thickness=14,
             len=0.85,
         ),
-        hovertemplate="<b>%{y}</b><br>%{x}<br>%{text}<extra></extra>",
+        hovertemplate="<b>%{y}</b><br>%{x}<br><b>%{text}</b><extra></extra>",
     ))
 
     fig_h = max(350, len(row_labels) * 26)
     fig.update_layout(
-        title=dict(text=f"{cls} class — Seat Availability (green=free, red=full)",
-                   font=dict(size=14, color=FX_DARK)),
-        xaxis=dict(tickangle=-45, tickfont=dict(size=9), **_NO_GRID),
-        yaxis=dict(tickfont=dict(size=9), autorange="reversed", **_NO_GRID),
+        title=_chart_title(f"{cls} class — Seat Availability Heatmap"),
+        annotations=[_subtitle("Green = available  ·  Yellow = limited  ·  Red = full / waitlisted")],
+        xaxis=dict(tickangle=-45, tickfont=dict(size=10, color=FX_DARK), **_NO_GRID),
+        yaxis=dict(tickfont=dict(size=10, color=FX_DARK), autorange="reversed", **_NO_GRID),
         height=fig_h,
         **_PLOTLY_LAYOUT,
     )
@@ -456,36 +509,77 @@ def _chart_heatmap(results: AggregatedResults, cls: str, max_trains: int) -> go.
 
 
 def _chart_pressure_gauge(pressure: dict[str, Optional[float]]) -> go.Figure:
-    """Radial gauge-style bar chart for weekday pressure."""
-    days   = WEEKDAY_NAMES
+    """Horizontal bar chart for weekday occupancy — better label readability."""
+    days   = WEEKDAY_NAMES[::-1]  # Mon at top
     vals   = [int((pressure.get(d) or 0) * 100) for d in days]
     colors = [FX_RED if v >= 70 else FX_AMBER if v >= 40 else FX_GREEN for v in vals]
 
-    fig = go.Figure()
-    for i, (day, val, col) in enumerate(zip(days, vals, colors)):
-        fig.add_trace(go.Bar(
-            x=[day], y=[val],
-            marker_color=col,
-            marker_line_color=FX_WHITE, marker_line_width=1.5,
-            text=[f"{val}%"], textposition="outside",
-            textfont=dict(size=12, color=FX_DARK, family="Segoe UI"),
-            showlegend=False,
-            hovertemplate=f"<b>{day}</b><br>{val}% occupancy<extra></extra>",
-        ))
+    fig = go.Figure(go.Bar(
+        x=vals, y=days,
+        orientation="h",
+        marker_color=colors,
+        marker_line_color=FX_WHITE, marker_line_width=2,
+        text=[f"<b>{v}%</b>" for v in vals],
+        textposition="outside",
+        textfont=dict(size=13, color=FX_DARK, family="Segoe UI"),
+        hovertemplate="<b>%{y}</b><br>%{x}% avg occupancy<extra></extra>",
+        showlegend=False,
+    ))
 
-    fig.add_hline(y=70, line_dash="dot", line_color=FX_RED,   line_width=1.2,
-                  annotation_text="High demand", annotation_position="right",
-                  annotation_font_color=FX_RED, annotation_font_size=9)
-    fig.add_hline(y=40, line_dash="dot", line_color=FX_AMBER, line_width=1.2,
-                  annotation_text="Medium demand", annotation_position="right",
-                  annotation_font_color=FX_AMBER, annotation_font_size=9)
+    fig.add_vline(x=70, line_dash="dot", line_color=FX_RED,   line_width=1.2,
+                  annotation_text="High ≥70%", annotation_position="top",
+                  annotation_font_color=FX_RED, annotation_font_size=10)
+    fig.add_vline(x=40, line_dash="dot", line_color=FX_AMBER, line_width=1.2,
+                  annotation_text="Medium ≥40%", annotation_position="top",
+                  annotation_font_color=FX_AMBER, annotation_font_size=10)
 
     fig.update_layout(
-        title=dict(text="Average Train Occupancy by Day of Week",
-                   font=dict(size=14, color=FX_DARK)),
-        yaxis=dict(title="Avg Occupancy %", range=[0, 120], **_GRID),
-        xaxis=dict(**_NO_GRID),
+        title=_chart_title("Average Train Occupancy by Day of Week"),
+        annotations=[_subtitle("Red ≥70%  ·  Amber 40–69%  ·  Green <40%")],
+        xaxis=dict(title="Avg Occupancy %", range=[0, _ymax(vals)], **_GRID),
+        yaxis=dict(tickfont=dict(size=13, color=FX_DARK), **_NO_GRID),
         bargap=0.3,
+        **_PLOTLY_LAYOUT,
+    )
+    return fig
+
+
+def _chart_weekly_occ(weekly: list[dict]) -> go.Figure:
+    """Area + line chart showing week-by-week occupancy trend."""
+    labels   = [r["date_range"] for r in weekly]
+    occ      = [r["avg_occupancy"] if r["avg_occupancy"] is not None else 0 for r in weekly]
+    raw_occ  = [r["avg_occupancy"] for r in weekly]
+    colors   = [DEMAND_COLORS.get(r["demand_level"], FX_GREY)
+                if r["demand_level"] != "—" else FX_GREY for r in weekly]
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=labels, y=occ,
+        mode="lines+markers+text",
+        fill="tozeroy",
+        fillcolor="rgba(115,215,0,0.12)",
+        line=dict(color=FX_GREEN, width=2.5),
+        marker=dict(size=11, color=colors, line=dict(width=2, color=FX_WHITE)),
+        text=[f"<b>{v}%</b>" if raw_occ[i] is not None else "" for i, v in enumerate(occ)],
+        textposition="top center",
+        textfont=dict(size=13, color=FX_DARK, family="Segoe UI"),
+        hovertemplate="<b>%{x}</b><br>%{y}% avg occupancy<extra></extra>",
+        name="Avg Occupancy %",
+        showlegend=False,
+    ))
+
+    fig.add_hline(y=70, line_dash="dot", line_color=FX_RED,   line_width=1.2,
+                  annotation_text="High ≥70%", annotation_position="right",
+                  annotation_font_color=FX_RED, annotation_font_size=10)
+    fig.add_hline(y=40, line_dash="dot", line_color=FX_AMBER, line_width=1.2,
+                  annotation_text="Medium ≥40%", annotation_position="right",
+                  annotation_font_color=FX_AMBER, annotation_font_size=10)
+
+    fig.update_layout(
+        title=_chart_title("Week-by-Week Occupancy Trend"),
+        annotations=[_subtitle("Each point = one full calendar week · dot colour = demand level")],
+        xaxis=dict(tickangle=-20, showgrid=False, tickfont=dict(size=12, color=FX_DARK)),
+        yaxis=dict(title="Avg Occupancy %", range=[0, _ymax(occ)], **_GRID),
         **_PLOTLY_LAYOUT,
     )
     return fig
@@ -603,7 +697,65 @@ def render_bus(results: AggregatedResults) -> None:
             use_container_width=True, hide_index=True,
         )
 
-        # Peak dates
+        # ── Week-by-week analysis ───────────────────────────────────────────
+        st.markdown('<div class="fx-section">📆 Week-by-Week Occupancy Trend</div>',
+                    unsafe_allow_html=True)
+        weekly = results.weekly_demand_analysis()
+        if any(r["avg_occupancy"] is not None for r in weekly):
+            st.plotly_chart(_chart_weekly_occ(weekly), use_container_width=True)
+
+            st.markdown('<div class="fx-section">💡 Weekly Recommendations</div>',
+                        unsafe_allow_html=True)
+            for r in weekly:
+                level   = r["demand_level"]
+                occ_val = r["avg_occupancy"]
+                occ_str = f"{occ_val}% avg occupancy" if occ_val is not None else "no data"
+                if level == "High":
+                    icon, card_level = "🔴", "high"
+                    body = (f"Week {r['week']} ({r['date_range']}): {occ_str}. "
+                            "Trains heavily booked — maximise bus capacity, add extra departures.")
+                elif level == "Medium":
+                    icon, card_level = "🟡", "med"
+                    body = (f"Week {r['week']} ({r['date_range']}): {occ_str}. "
+                            "Moderate demand — maintain frequency, consider +1 bus on busy days.")
+                else:
+                    icon, card_level = "🟢", "low"
+                    body = (f"Week {r['week']} ({r['date_range']}): {occ_str}. "
+                            "Good availability — standard schedule is sufficient.")
+                st.markdown(
+                    _sug_card(icon, f"Week {r['week']}: {r['date_range']}", body, card_level),
+                    unsafe_allow_html=True,
+                )
+
+            st.markdown('<div class="fx-section">📋 Weekly Action Table</div>',
+                        unsafe_allow_html=True)
+            weekly_rows = []
+            for r in weekly:
+                occ_val = r["avg_occupancy"]
+                p = (occ_val or 0) / 100
+                occ_str = f"{occ_val}%" if occ_val is not None else "—"
+                if p >= 0.70:
+                    action, buses = "Deploy extra buses", "+2 buses per slot"
+                elif p >= 0.40:
+                    action, buses = "Monitor closely",   "+1 bus on peak days"
+                else:
+                    action, buses = "Standard schedule", "No change needed"
+                weekly_rows.append({
+                    "Week #":             r["week"],
+                    "Date Range":         r["date_range"],
+                    "Total Train-Days":   r["total_trains"],
+                    "Avg Occupancy":      occ_str,
+                    "Demand":             r["demand_level"],
+                    "Recommended Action": action,
+                    "Bus Adjustment":     buses,
+                })
+            wdf = pd.DataFrame(weekly_rows)
+            st.dataframe(
+                wdf.style.map(_demand_style, subset=["Demand"]),
+                use_container_width=True, hide_index=True,
+            )
+
+        # ── Peak dates ──────────────────────────────────────────────────────
         if bus["high_demand_dates"]:
             st.markdown('<div class="fx-section">📌 Peak Demand Dates</div>',
                         unsafe_allow_html=True)
