@@ -38,11 +38,16 @@ st.set_page_config(
 
 st.markdown(f"""
 <style>
-/* ── Base ── */
-html, body, [class*="css"] {{
-    font-family: "Segoe UI", Arial, sans-serif;
-    background-color: {FX_LIGHT};
-}}
+/* ── Base — light background, dark text everywhere in main area ── */
+html, body {{ font-family: "Segoe UI", Arial, sans-serif; }}
+.stApp {{ background-color: {FX_LIGHT}; }}
+/* Ensure all regular text in main area is dark */
+.stApp p, .stApp span, .stApp div, .stApp label,
+.stMarkdown, .stMarkdown p {{ color: {FX_DARK}; }}
+/* Fix Streamlit's own metric/caption text */
+[data-testid="stMetricValue"] {{ color: {FX_DARK} !important; }}
+[data-testid="stMetricLabel"] {{ color: {FX_MID}  !important; }}
+[data-testid="stCaptionContainer"] p {{ color: {FX_MID} !important; }}
 
 /* ── Top header ── */
 .fx-header {{
@@ -56,7 +61,7 @@ html, body, [class*="css"] {{
 }}
 .fx-header .logo {{
     background: {FX_GREEN};
-    color: {FX_DARK};
+    color: {FX_DARK} !important;
     font-weight: 900;
     font-size: 1.05rem;
     padding: 7px 15px;
@@ -64,101 +69,86 @@ html, body, [class*="css"] {{
     letter-spacing: 1.5px;
     flex-shrink: 0;
 }}
-.fx-header .title {{ font-size: 1.3rem; font-weight: 700; color: {FX_WHITE}; }}
-.fx-header .sub   {{ font-size: 0.8rem;  color: #8899aa; margin-top: 3px; }}
+.fx-header .title {{ font-size: 1.3rem; font-weight: 700; color: {FX_WHITE} !important; }}
+.fx-header .sub   {{ font-size: 0.8rem; color: #8899aa !important; margin-top: 3px; }}
 
 /* ── KPI cards ── */
 .kpi-row {{ display: flex; gap: 16px; margin-bottom: 8px; }}
 .kpi-card {{
-    flex: 1;
-    background: {FX_CARD};
-    border-radius: 12px;
-    padding: 20px 24px;
-    box-shadow: 0 2px 10px rgba(0,0,0,0.07);
-    border-top: 4px solid {FX_GREEN};
-    text-align: center;
+    flex: 1; background: {FX_WHITE};
+    border-radius: 12px; padding: 20px 24px;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.08);
+    border-top: 4px solid {FX_GREEN}; text-align: center;
 }}
-.kpi-card .kval {{ font-size: 2.2rem; font-weight: 800; color: {FX_DARK}; line-height: 1; }}
-.kpi-card .klbl {{ font-size: 0.8rem; color: {FX_MID}; margin-top: 6px; letter-spacing: 0.5px; text-transform: uppercase; }}
+.kpi-card .kval {{ font-size: 2.2rem; font-weight: 800; color: {FX_DARK} !important; line-height: 1; }}
+.kpi-card .klbl {{ font-size: 0.78rem; color: {FX_MID} !important; margin-top: 6px;
+                   letter-spacing: 0.5px; text-transform: uppercase; }}
 
-/* ── Section titles ── */
+/* ── Section headings ── */
 .fx-section {{
-    font-size: 1rem;
-    font-weight: 700;
-    color: {FX_DARK};
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    margin: 24px 0 12px 0;
-    padding-bottom: 6px;
-    border-bottom: 2px solid {FX_GREEN};
+    font-size: 1rem; font-weight: 700; color: {FX_DARK} !important;
+    display: flex; align-items: center; gap: 8px;
+    margin: 24px 0 12px 0; padding-bottom: 6px;
+    border-bottom: 3px solid {FX_GREEN};
 }}
 
-/* ── Suggestion cards ── */
+/* ── Suggestion cards — explicit colours so dark sidebar CSS can't bleed in ── */
 .sug-card {{
-    border-radius: 10px;
-    padding: 14px 18px;
-    margin-bottom: 12px;
-    display: flex;
-    align-items: flex-start;
-    gap: 14px;
-    box-shadow: 0 1px 6px rgba(0,0,0,0.07);
+    border-radius: 10px; padding: 14px 18px; margin-bottom: 12px;
+    display: flex; align-items: flex-start; gap: 14px;
+    box-shadow: 0 1px 6px rgba(0,0,0,0.08);
 }}
-.sug-card .sug-icon {{
-    font-size: 1.6rem;
-    flex-shrink: 0;
-    line-height: 1;
-    margin-top: 2px;
-}}
-.sug-card .sug-title {{
-    font-weight: 700;
-    font-size: 0.95rem;
-    margin-bottom: 3px;
-}}
-.sug-card .sug-body {{
-    font-size: 0.85rem;
-    line-height: 1.5;
-    color: #444;
-}}
-.sug-high  {{ background: #FFF0F0; border-left: 5px solid {FX_RED};   }}
-.sug-med   {{ background: #FFFAEB; border-left: 5px solid {FX_AMBER}; }}
-.sug-low   {{ background: #F1F8E9; border-left: 5px solid {FX_GREEN}; }}
-.sug-info  {{ background: #EEF4FF; border-left: 5px solid #4A6CF7;    }}
+.sug-card .sug-icon {{ font-size: 1.6rem; flex-shrink: 0; line-height: 1; margin-top: 2px; }}
+.sug-card .sug-title {{ font-weight: 700; font-size: 0.95rem; margin-bottom: 3px; color: {FX_DARK} !important; }}
+.sug-card .sug-body  {{ font-size: 0.85rem; line-height: 1.6; color: #333 !important; }}
+.sug-high {{ background: #FFF0F0 !important; border-left: 5px solid {FX_RED}; }}
+.sug-med  {{ background: #FFFAEB !important; border-left: 5px solid {FX_AMBER}; }}
+.sug-low  {{ background: #F1F8E9 !important; border-left: 5px solid {FX_GREEN}; }}
+.sug-info {{ background: #EEF4FF !important; border-left: 5px solid #4A6CF7; }}
 
-/* ── Action plan table rows ── */
-.ap-high   {{ background:#FFF0F0; color:{FX_RED};   font-weight:700; border-radius:4px; padding:2px 8px; }}
-.ap-med    {{ background:#FFFAEB; color:#B8680B;    font-weight:700; border-radius:4px; padding:2px 8px; }}
-.ap-low    {{ background:#F1F8E9; color:{FX_GREEN2}; font-weight:700; border-radius:4px; padding:2px 8px; }}
-
-/* ── Sidebar ── */
+/* ── Sidebar — dark theme, scoped tightly ── */
 section[data-testid="stSidebar"] {{
     background: {FX_DARK} !important;
 }}
-section[data-testid="stSidebar"] *,
-section[data-testid="stSidebar"] label,
-section[data-testid="stSidebar"] p {{
+/* Only direct text labels and paragraphs inside sidebar get white */
+section[data-testid="stSidebar"] > div > div > div > div p,
+section[data-testid="stSidebar"] > div > div > div > div span,
+section[data-testid="stSidebar"] > div > div > div > div label,
+section[data-testid="stSidebar"] h3,
+section[data-testid="stSidebar"] .stMarkdown p {{
     color: {FX_WHITE} !important;
 }}
-section[data-testid="stSidebar"] input {{
+/* Sidebar inputs */
+section[data-testid="stSidebar"] input[type="text"] {{
     background: #242440 !important;
     color: {FX_WHITE} !important;
-    border: 1px solid #444 !important;
+    border: 1px solid #556 !important;
     border-radius: 6px !important;
 }}
+/* Sidebar date picker text */
+section[data-testid="stSidebar"] [data-testid="stDateInput"] input {{
+    color: {FX_WHITE} !important;
+    background: #242440 !important;
+}}
+/* Sidebar checkbox label */
+section[data-testid="stSidebar"] [data-testid="stCheckbox"] label span {{
+    color: {FX_WHITE} !important;
+}}
+/* Sidebar caption */
+section[data-testid="stSidebar"] [data-testid="stCaptionContainer"] p {{
+    color: #aabbc0 !important;
+}}
 
-/* ── Primary button ── */
-div[data-testid="stButton"] > button[kind="primary"] {{
+/* ── Search button ── */
+section[data-testid="stSidebar"] button[kind="primary"] {{
     background: {FX_GREEN} !important;
     color: {FX_DARK} !important;
     font-weight: 800 !important;
     border: none !important;
     border-radius: 8px !important;
-    padding: 10px 0 !important;
     font-size: 1rem !important;
-    letter-spacing: 0.4px;
-    transition: background 0.15s;
 }}
-div[data-testid="stButton"] > button[kind="primary"]:hover {{
+section[data-testid="stSidebar"] button[kind="primary"]:hover {{
     background: #5CB800 !important;
 }}
 
@@ -167,23 +157,24 @@ div[data-testid="stButton"] > button[kind="primary"]:hover {{
     background: {FX_DARK};
     border-radius: 10px 10px 0 0;
     padding: 6px 8px 0;
-    gap: 3px;
+    gap: 4px;
 }}
 .stTabs [data-baseweb="tab"] {{
-    color: #99aabb !important;
-    font-weight: 600;
-    font-size: 0.88rem;
-    border-radius: 7px 7px 0 0;
-    padding: 8px 16px;
-    transition: all 0.15s;
+    color: #aabbcc !important;
+    font-weight: 600; font-size: 0.88rem;
+    border-radius: 7px 7px 0 0; padding: 8px 18px;
 }}
 .stTabs [aria-selected="true"] {{
     background: {FX_GREEN} !important;
     color: {FX_DARK} !important;
+    font-weight: 700 !important;
 }}
 
 /* ── Progress bar ── */
-.stProgress > div > div {{ background-color: {FX_GREEN} !important; }}
+.stProgress > div > div > div {{ background-color: {FX_GREEN} !important; }}
+
+/* ── Info / success / error banners — keep their own colours ── */
+[data-testid="stAlert"] p {{ color: inherit !important; }}
 </style>
 """, unsafe_allow_html=True)
 
@@ -539,7 +530,7 @@ def render_overview(results: AggregatedResults) -> None:
         })
     df = pd.DataFrame(rows)
     st.dataframe(
-        df.style.applymap(_demand_style, subset=["Demand Level"]),
+        df.style.map(_demand_style, subset=["Demand Level"]),
         use_container_width=True, hide_index=True,
     )
 
@@ -608,7 +599,7 @@ def render_bus(results: AggregatedResults) -> None:
             })
         df = pd.DataFrame(table_rows)
         st.dataframe(
-            df.style.applymap(_demand_style, subset=["Demand"]),
+            df.style.map(_demand_style, subset=["Demand"]),
             use_container_width=True, hide_index=True,
         )
 
@@ -624,7 +615,7 @@ def render_bus(results: AggregatedResults) -> None:
             } for d, p, cnt in bus["high_demand_dates"]]
             pdf = pd.DataFrame(peak_rows)
             st.dataframe(
-                pdf.style.applymap(_demand_style, subset=["Status"]),
+                pdf.style.map(_demand_style, subset=["Status"]),
                 use_container_width=True, hide_index=True,
             )
 
@@ -639,7 +630,7 @@ def render_trains(results: AggregatedResults) -> None:
     df = pd.DataFrame(trains)
     avail_cols = [c for c in CLASS_ORDER if c in df.columns]
     st.dataframe(
-        df.style.applymap(lambda v: _cell_color(str(v)), subset=avail_cols),
+        df.style.map(lambda v: _cell_color(str(v)), subset=avail_cols),
         use_container_width=True, hide_index=True,
     )
 
