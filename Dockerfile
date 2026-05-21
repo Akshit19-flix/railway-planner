@@ -20,10 +20,6 @@ RUN playwright install-deps chromium
 
 COPY . .
 
-EXPOSE 8501
+EXPOSE $PORT
 
-CMD ["python", "-m", "streamlit", "run", "app.py", \
-     "--server.port=8501", \
-     "--server.address=0.0.0.0", \
-     "--server.headless=true", \
-     "--browser.gatherUsageStats=false"]
+CMD ["sh", "-c", "python -m streamlit run app.py --server.port=$PORT --server.address=0.0.0.0 --server.headless=true --browser.gatherUsageStats=false"]
