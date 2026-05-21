@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: railways-planner
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    envVars:
+      - key: PYTHONUNBUFFERED
+        value: "1"
+    healthCheckPath: /

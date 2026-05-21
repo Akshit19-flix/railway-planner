@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+*.pyo
+.env
+*.log
+*.bin
+*.png
+*.html
+*.json
+!stations.py
