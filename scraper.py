@@ -155,7 +155,22 @@ def scrape_availability_range(
     iso_dates = [d.strftime("%Y-%m-%d") for d in dates]
     total = len(dates)
 
-    # ── Path 1: Batch Playwright subprocess (fast — one browser, async pages) ──
+    # ── Path 1: HTTP API (fast, no browser, works on Render) ────────────────
+    if HTTP_AVAILABLE:
+        try:
+            raw = scrape_availability_http(
+                from_code.upper(), to_code.upper(),
+                iso_dates, progress_cb=progress_cb, concurrency=10,
+            )
+            if is_viable(raw, iso_dates, threshold=0.4):
+                return {
+                    date.fromisoformat(k): {r["train_number"]: r["availability"] for r in v}
+                    for k, v in raw.items()
+                }
+        except Exception:
+            pass
+
+    # ── Path 2: Batch Playwright subprocess (local fallback if HTTP fails) ──
     try:
         return _run_batch_worker(
             from_code.upper(), to_code.upper(),

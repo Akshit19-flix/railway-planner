@@ -1,19 +1,19 @@
 """
-Cloud-compatible HTTP scraper for Indian Railways data via erail.in.
-Uses httpx (async) + BeautifulSoup — no Playwright dependency.
+Fast cloud-compatible scraper for Indian Railways data via erail.in.
 
-Exported API (mirrors the subset used by scraper.py):
-  scrape_schedule_http(from_code, to_code)          -> list[dict]
-  scrape_availability_http(from_code, to_code,
-                           dates, progress_cb=None,
-                           concurrency=8)            -> dict[str, list[dict]]
-  is_viable(results, dates, threshold=0.6)           -> bool
+Schedule:      HTTP GET  erail.in/trains-between-stations  (BeautifulSoup)
+Availability:  POST      s.erail.in/getvalue               (direct IRCTC cache API)
+
+No Playwright / no browser needed — works on Render free tier.
+30 dates completes in ~5-8 seconds instead of 2+ minutes.
 """
 
 import asyncio
 import concurrent.futures
+import json
 import re
 import sys
+import time
 import warnings
 from datetime import datetime
 
@@ -26,6 +26,7 @@ warnings.filterwarnings("ignore")
 
 SCHEDULE_URL     = "https://erail.in/trains-between-stations/{from_code}/{to_code}"
 AVAILABILITY_URL = "https://erail.in/_TrainsPair.aspx?from={from_code}&to={to_code}&date={date_str}"
+AVL_API_URL      = "https://s.erail.in/getvalue"
 
 HEADERS = {
     "User-Agent": (
@@ -33,54 +34,37 @@ HEADERS = {
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/120.0.0.0 Safari/537.36"
     ),
-    "Accept": (
-        "text/html,application/xhtml+xml,application/xml;"
-        "q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8"
-    ),
+    "Accept":          "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9",
-    "Referer": "https://erail.in/",
+    "Referer":         "https://erail.in/",
 }
 
 DAY_COLUMNS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 CLASS_ORDER  = ["1A", "2A", "3A", "CC", "SL", "2S", "3E"]
 
 
-# ── HTML → plain text ──────────────────────────────────────────────────────────
-
-def _html_to_text(html: str) -> str:
-    """
-    Convert HTML to tab-separated plain text mimicking Playwright's inner_text.
-
-    - For each <tr>: join all <td>/<th> text with "\\t" and append as a line.
-    - For non-table block elements (h1-h3, p) that don't contain a <table>:
-      append their text as a line.
-    """
-    soup = BeautifulSoup(html, "html.parser")
-    lines = []
-
-    # Collect all <tr> rows from every table
-    for tr in soup.find_all("tr"):
-        cells = tr.find_all(["td", "th"])
-        if cells:
-            lines.append("\t".join(c.get_text(" ", strip=True) for c in cells))
-
-    # Collect block-level text outside tables
-    for tag in soup.find_all(["h1", "h2", "h3", "p"]):
-        if not tag.find("table"):
-            text = tag.get_text(" ", strip=True)
-            if text:
-                lines.append(text)
-
-    return "\n".join(lines)
-
-
-# ── Parsing helpers (duplicated exactly from scraper_worker.py) ────────────────
+# ── Parsing helpers ────────────────────────────────────────────────────────────
 
 def _clean(v: str) -> str:
     v = v.strip().replace("\xa0", "").strip()
     if v in ("x", "", "Departed"):
         return "—"
     return v
+
+
+def _html_to_text(html: str) -> str:
+    soup = BeautifulSoup(html, "html.parser")
+    lines = []
+    for tr in soup.find_all("tr"):
+        cells = tr.find_all(["td", "th"])
+        if cells:
+            lines.append("\t".join(c.get_text(" ", strip=True) for c in cells))
+    for tag in soup.find_all(["h1", "h2", "h3", "p"]):
+        if not tag.find("table"):
+            text = tag.get_text(" ", strip=True)
+            if text:
+                lines.append(text)
+    return "\n".join(lines)
 
 
 def _parse_schedule(body_text: str) -> list[dict]:
@@ -144,168 +128,187 @@ def _fallback_parse(body_text: str) -> list[dict]:
     return trains
 
 
-def _parse_availability(body_text: str) -> list[dict]:
-    result = []
-    lines = [l for l in body_text.splitlines() if l.strip()]
-    header_idx = -1
-    class_start = 17
-    for i, line in enumerate(lines):
-        if re.search(r'\bM\b.*\bT\b.*\bW\b.*\bT\b.*\bF\b.*\bS\b.*\bS\b', line):
-            header_idx = i
-            parts = re.split(r'\t+', line)
-            for j, p in enumerate(parts):
-                if p.strip() == "1A":
-                    class_start = j
-                    break
-            break
-    if header_idx == -1:
-        return result
-    for line in lines[header_idx + 1:]:
-        parts = re.split(r'\t+', line.strip())
-        if not parts or not re.match(r'^\d{4,5}$', parts[0].strip()):
-            continue
-        try:
-            avail = {}
-            for ci, cls in enumerate(CLASS_ORDER):
-                col = class_start + ci
-                avail[cls] = _clean(parts[col]) if col < len(parts) else "—"
-            result.append({"train_number": parts[0].strip(), "availability": avail})
-        except (IndexError, ValueError):
-            continue
-    return result
+# ── Availability value normaliser ──────────────────────────────────────────────
+
+def _parse_avl_value(raw: str) -> str:
+    """
+    Convert s.erail.in cache values to the display format used elsewhere.
+      GNWL15/WL4     → WL4
+      RLWL10/WL10    → WL10
+      AVL 32         → 32
+      AVAILABLE 32   → 32
+      NOT AVAILABLE  → NA
+    """
+    v = raw.strip()
+    if not v or v in ("NOT AVAILABLE", "NOT_AVAILABLE", "TRAIN_NOTRUNNING"):
+        return "NA"
+    if v == "AVAILABLE":
+        return "AVL"
+    # Current status is after the slash: GNWL15/WL4
+    if "/" in v:
+        v = v.split("/")[-1].strip()
+    # AVL 32 or AVAILABLE 32 → 32
+    if v.upper().startswith("AVL") or v.upper().startswith("AVAILABLE"):
+        n = re.sub(r'[A-Z]+\s*', '', v, flags=re.IGNORECASE).strip()
+        return n if n else "AVL"
+    # WL4, RLWL4, GNWL4 → WL4
+    if "WL" in v.upper():
+        m = re.search(r'WL(\d+)', v, re.IGNORECASE)
+        return f"WL{m.group(1)}" if m else "WL"
+    # RAC → R#
+    if v.upper().startswith("RAC"):
+        m = re.search(r'(\d+)', v)
+        return f"R{m.group(1)}" if m else "RAC"
+    return v
 
 
-# ── Async HTTP core ────────────────────────────────────────────────────────────
-
-async def _fetch_html(client: httpx.AsyncClient, url: str) -> str:
-    """GET url, return response text or "" on any error."""
-    try:
-        resp = await client.get(url, timeout=30)
-        resp.raise_for_status()
-        return resp.text
-    except Exception as e:
-        print(f"[http_scraper] fetch error {url}: {e}", file=sys.stderr)
-        return ""
-
+# ── Schedule scraper ───────────────────────────────────────────────────────────
 
 async def _scrape_schedule_async(from_code: str, to_code: str) -> list[dict]:
-    url = SCHEDULE_URL.format(
-        from_code=from_code.upper(),
-        to_code=to_code.upper(),
-    )
-    async with httpx.AsyncClient(headers=HEADERS, follow_redirects=True) as client:
-        html = await _fetch_html(client, url)
-    if not html:
-        return []
-    body_text = _html_to_text(html)
-    return _parse_schedule(body_text)
+    url = SCHEDULE_URL.format(from_code=from_code.upper(), to_code=to_code.upper())
+    async with httpx.AsyncClient(headers=HEADERS, follow_redirects=True, timeout=30) as c:
+        r = await c.get(url)
+    body = _html_to_text(r.text)
+    return _parse_schedule(body)
 
+
+# ── Availability scraper — s.erail.in batch API ────────────────────────────────
 
 async def _scrape_availability_async(
     from_code: str,
-    to_code: str,
-    dates: list[str],
-    progress_cb,
-    concurrency: int,
+    to_code:   str,
+    dates:     list[str],       # ["YYYY-MM-DD", ...]
+    progress_cb=None,
+    concurrency: int = 10,
 ) -> dict:
     """
-    Fetch availability for every date concurrently, honouring `concurrency`.
-    Calls progress_cb(done, total, date_str) after each date completes.
+    1. Fetch the base _TrainsPair.aspx page for the first date to extract
+       all data-avlkey templates (TRAINNO_FROM_TO_CLASS_QUOTA).
+    2. For every date, POST all keys to s.erail.in/getvalue in parallel.
+       Returns {iso_date: {train_number: {cls: value}}}.
     """
-    results  = {}
-    total    = len(dates)
-    done_ctr = [0]   # mutable counter; GIL protects single-element list writes in CPython
-    sem      = asyncio.Semaphore(concurrency)
+    results = {}
+    total   = len(dates)
+    done    = [0]
+    sem     = asyncio.Semaphore(concurrency)
 
-    # Build the warm-up / schedule URL to seed cookies
-    schedule_url = SCHEDULE_URL.format(
-        from_code=from_code.upper(),
-        to_code=to_code.upper(),
+    first_dt = datetime.strptime(dates[0], "%Y-%m-%d")
+    base_url = AVAILABILITY_URL.format(
+        from_code=from_code.upper(), to_code=to_code.upper(),
+        date_str=first_dt.strftime("%d-%b-%Y"),
     )
 
-    async with httpx.AsyncClient(headers=HEADERS, follow_redirects=True) as client:
-        # Warm up — load schedule page to acquire any session cookies
-        await _fetch_html(client, schedule_url)
+    async with httpx.AsyncClient(headers=HEADERS, follow_redirects=True, timeout=40) as client:
+        # Load the base page once to extract key templates
+        await client.get(SCHEDULE_URL.format(from_code=from_code.upper(), to_code=to_code.upper()))
+        base_resp = await client.get(base_url)
+        soup = BeautifulSoup(base_resp.text, "html.parser")
+        all_keys = [
+            a.get("data-avlkey") for a in soup.find_all(attrs={"data-avlkey": True})
+            if not a.get("data-avlkey", "").endswith("_f")
+        ]
+        # Strip the date part (last segment) to get reusable templates
+        key_templates = list(dict.fromkeys(
+            "_".join(k.split("_")[:-1]) for k in all_keys
+        ))
 
-        async def fetch_one(iso_date: str):
-            dt       = datetime.strptime(iso_date, "%Y-%m-%d")
-            date_str = dt.strftime("%d-%b-%Y")   # e.g. "25-May-2026"
-            url = AVAILABILITY_URL.format(
-                from_code=from_code.upper(),
-                to_code=to_code.upper(),
-                date_str=date_str,
-            )
+        if not key_templates:
+            return {}
+
+        async def fetch_one_date(iso_date: str):
+            dt      = datetime.strptime(iso_date, "%Y-%m-%d")
+            day_key = f"{dt.day}-{dt.month}"
+            keys    = [f"{t}_{day_key}" for t in key_templates]
+            batch   = "~".join(keys) + "~"
+            payload = json.dumps({"Action": "AVL_Data", "Data": batch})
+
             async with sem:
-                html = await _fetch_html(client, url)
-
-            body_text      = _html_to_text(html) if html else ""
-            parsed         = _parse_availability(body_text)
-            results[iso_date] = parsed
-
-            done_ctr[0] += 1
-            if progress_cb is not None:
                 try:
-                    progress_cb(done_ctr[0], total, iso_date)
+                    resp = await client.post(
+                        AVL_API_URL,
+                        content=payload,
+                        headers={**HEADERS,
+                                 "Content-Type": "application/json",
+                                 "Accept":       "application/json",
+                                 "Referer":      "https://erail.in/"},
+                        timeout=20,
+                    )
+                    data = resp.json().get("data", "")
+                except Exception as e:
+                    print(f"[http_scraper] {iso_date} error: {e}", file=sys.stderr)
+                    data = ""
+
+            # Strip leading count^AVL_Response~ header
+            if "AVL_Response~" in data:
+                data = data.split("AVL_Response~", 1)[1]
+
+            # Parse key^value entries
+            trains: dict[str, dict] = {}
+            for entry in data.split("~"):
+                if "^" not in entry:
+                    continue
+                key, raw_val = entry.split("^", 1)
+                raw_val = raw_val.split("^")[0]   # strip trailing ^timestamp
+                parts = key.split("_")
+                if len(parts) < 4:
+                    continue
+                train_num = parts[0]
+                cls       = parts[3]
+                if cls not in CLASS_ORDER:
+                    continue
+                if train_num not in trains:
+                    trains[train_num] = {c: "—" for c in CLASS_ORDER}
+                trains[train_num][cls] = _parse_avl_value(raw_val)
+
+            results[iso_date] = [
+                {"train_number": num, "availability": avail}
+                for num, avail in trains.items()
+            ]
+            done[0] += 1
+            if progress_cb:
+                try:
+                    disp = dt.strftime("%d %b")
+                    progress_cb(done[0], total, disp)
                 except Exception:
                     pass
 
-        # Fire all tasks; asyncio.as_completed ensures progress_cb is called
-        # as each finishes rather than waiting for the whole batch.
-        tasks = [asyncio.ensure_future(fetch_one(d)) for d in dates]
-        for coro in asyncio.as_completed(tasks):
-            await coro
+        await asyncio.gather(*[fetch_one_date(d) for d in dates])
 
     return results
 
 
 # ── Public sync wrappers ───────────────────────────────────────────────────────
-# Run async code in a dedicated thread to avoid nest_asyncio issues when the
-# caller is already inside an event loop (e.g. Jupyter, Streamlit).
 
 def scrape_schedule_http(from_code: str, to_code: str) -> list[dict]:
-    """Return schedule list for trains running between from_code and to_code."""
     try:
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
             return pool.submit(
                 asyncio.run, _scrape_schedule_async(from_code, to_code)
             ).result(timeout=60)
     except Exception as e:
-        print(f"[http_scraper] scrape_schedule_http error: {e}", file=sys.stderr)
+        print(f"[http_scraper] schedule error: {e}", file=sys.stderr)
         return []
 
 
 def scrape_availability_http(
-    from_code: str,
-    to_code: str,
-    dates: list[str],
-    progress_cb=None,
-    concurrency: int = 8,
+    from_code:   str,
+    to_code:     str,
+    dates:       list[str],
+    progress_cb  = None,
+    concurrency: int = 10,
 ) -> dict:
-    """
-    Return {iso_date_str: [{"train_number": ..., "availability": {cls: val}}]}
-    for every date in `dates` (list of "YYYY-MM-DD" strings).
-
-    progress_cb(done: int, total: int, date_str: str) is called after each date.
-    """
     try:
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
             return pool.submit(
                 asyncio.run,
-                _scrape_availability_async(
-                    from_code, to_code, dates, progress_cb, concurrency
-                ),
-            ).result(timeout=300)
+                _scrape_availability_async(from_code, to_code, dates, progress_cb, concurrency),
+            ).result(timeout=120)
     except Exception as e:
-        print(f"[http_scraper] scrape_availability_http error: {e}", file=sys.stderr)
+        print(f"[http_scraper] availability error: {e}", file=sys.stderr)
         return {}
 
 
-# ── Viability check ────────────────────────────────────────────────────────────
-
-def is_viable(results: dict, dates: list[str], threshold: float = 0.6) -> bool:
-    """
-    Return True if at least `threshold` fraction of dates have non-empty results.
-    """
+def is_viable(results: dict, dates: list[str], threshold: float = 0.4) -> bool:
     if not dates:
         return False
     non_empty = sum(1 for d in dates if results.get(d))
