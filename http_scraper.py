@@ -173,7 +173,11 @@ async def _scrape_schedule_async(from_code: str, to_code: str) -> list[dict]:
     url = SCHEDULE_URL.format(from_code=from_code.upper(), to_code=to_code.upper())
     async with httpx.AsyncClient(headers=HEADERS, follow_redirects=True, timeout=30) as c:
         r = await c.get(url)
-    return _parse_schedule_html(r.text)
+    all_trains = _parse_schedule_html(r.text)
+    # erail groups nearby station clusters on one page. For a Flixbus corridor
+    # view we return all trains, but tag each with whether it boards exactly at
+    # from_code so the UI can show a note.
+    return all_trains
 
 
 # ── Availability scraper — s.erail.in batch API ────────────────────────────────

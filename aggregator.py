@@ -11,23 +11,35 @@ from scraper import TrainInfo, CLASS_ORDER
 
 
 def _avail_pressure(val: str) -> Optional[float]:
-    """Convert an availability string to a 0-1 pressure score (1 = fully booked)."""
-    if val in ("—", "", None):
+    """
+    Categorical load score 0.0–1.0 (1 = fully booked).
+    None = class not on this train (excluded from all averages).
+
+    Bands:
+      50+ seats  → 0.0  (comfortable — green)
+      10–49      → 0.3  (filling up — light green)
+      1–9        → 0.6  (very limited — yellow)
+      RAC        → 0.8  (waitlist-adjacent, likely confirms — amber)
+      Pooled     → 0.75
+      WL / NA    → 1.0  (no confirmed seat — red)
+    """
+    if val in ("—", "", None, "None"):
         return None
-    if val == "NA" or str(val).startswith("WL"):
+    s = str(val).strip()
+    if s == "AVL":
+        return 0.0
+    if s == "NA" or s.startswith("WL"):
         return 1.0
-    if str(val).startswith("R"):
-        try:
-            return min(1.0, 0.80 + int(val[1:]) * 0.01)
-        except ValueError:
-            return 0.85
-    if str(val).startswith("P"):
-        try:
-            return max(0.0, 1.0 - int(val[1:]) / 60)
-        except ValueError:
-            return 0.65
+    if s.startswith("R"):    # RAC
+        return 0.8
+    if s.startswith("P"):    # Pooled quota
+        return 0.75
     try:
-        return max(0.0, 1.0 - int(val) / 150)
+        n = int(s)
+        if n >= 50:  return 0.0
+        if n >= 10:  return 0.3
+        if n >= 1:   return 0.6
+        return 1.0
     except ValueError:
         return None
 

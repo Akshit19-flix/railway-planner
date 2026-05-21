@@ -238,6 +238,22 @@ with st.sidebar:
         "🔴 `NA` — Full / no quota\n\n"
         "`—` — Class not on this train"
     )
+    st.markdown("---")
+    st.markdown("**How load is calculated**")
+    st.caption(
+        "Load score (0–100%) is a categorical index — not a seat-fill percentage:\n\n"
+        "🟢 **0%** — 50+ seats available\n\n"
+        "🟡 **30%** — 10–49 seats (filling up)\n\n"
+        "🟠 **60%** — 1–9 seats (very limited)\n\n"
+        "🟠 **75–80%** — RAC / Pooled quota\n\n"
+        "🔴 **100%** — Waitlisted or no quota\n\n"
+        "Avg occupancy % = mean load score across all "
+        "trains & classes with data for that day / week.\n\n"
+        "**Train count note:** erail.in shows trains for "
+        "the full Delhi cluster (NDLS + ANVT + DLI). "
+        "IRCTC counts only trains stopping at your exact station. "
+        "Select your boarding station carefully for accurate counts."
+    )
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -250,19 +266,35 @@ def resolve_station(raw: str) -> tuple[str, str]:
 
 
 def _avail_score(val) -> Optional[float]:
-    if val in ("—", "", None):
+    """
+    Categorical load score 0.0–1.0 for heatmap colouring.
+    Bands (shown in methodology note in sidebar):
+      0.0  = 50+ seats available  (green)
+      0.3  = 10–49 seats          (light green)
+      0.6  = 1–9 seats  (very limited, yellow)
+      0.8  = RAC / Pooled quota   (amber — likely to confirm)
+      1.0  = Waitlisted / NA      (red — no guaranteed seat)
+      None = class not on train   (grey, excluded from averages)
+    """
+    if val in ("—", "", None, "None"):
         return None
-    s = str(val)
-    if s == "NA" or s.startswith("WL"):
+    s = str(val).strip()
+    if s in ("NA", "AVL"):
+        return 0.0 if s == "AVL" else 1.0
+    if s.startswith("WL"):
         return 1.0
-    if s.startswith("R"):
-        try:   return min(1.0, 0.80 + int(s[1:]) * 0.01)
-        except ValueError: return 0.85
-    if s.startswith("P"):
-        try:   return max(0.0, 1.0 - int(s[1:]) / 60)
-        except ValueError: return 0.65
-    try:    return max(0.0, 1.0 - int(s) / 150)
-    except ValueError: return None
+    if s.startswith("R"):    # RAC
+        return 0.8
+    if s.startswith("P"):    # Pooled quota
+        return 0.75
+    try:
+        n = int(s)
+        if n >= 50:  return 0.0   # comfortable
+        if n >= 10:  return 0.3   # filling up
+        if n >= 1:   return 0.6   # very limited
+        return 1.0                # zero seats
+    except ValueError:
+        return None
 
 
 def _cell_color(val) -> str:
@@ -469,12 +501,14 @@ def _chart_heatmap(results: AggregatedResults, cls: str, max_trains: int) -> go.
         Z.append(row_z)
         Z_text.append(row_t)
 
+    # Colorscale aligned to categorical score bands:
+    # 0.0=50+ seats, 0.3=10-49, 0.6=1-9, 0.8=RAC, 1.0=WL/NA
     colorscale = [
-        [0.00, "#1B5E20"],
-        [0.35, "#66BB6A"],
-        [0.55, "#FFF176"],
-        [0.75, FX_AMBER],
-        [1.00, FX_RED],
+        [0.00, "#1B5E20"],   # deep green  — 50+ seats
+        [0.30, "#66BB6A"],   # mid green   — 10-49 seats
+        [0.60, "#FFF176"],   # yellow      — 1-9 seats
+        [0.80, FX_AMBER],    # amber       — RAC/Pooled
+        [1.00, FX_RED],      # red         — WL/NA
     ]
 
     fig = go.Figure(go.Heatmap(
@@ -483,14 +517,13 @@ def _chart_heatmap(results: AggregatedResults, cls: str, max_trains: int) -> go.
         textfont=dict(size=9, family="Segoe UI", color="#333333"),
         colorscale=colorscale,
         zmin=0, zmax=1,
-        zmid=0.5,
         colorbar=dict(
             title=dict(text="Load", font=dict(size=12, color=FX_DARK), side="right"),
-            tickvals=[0, 0.5, 1],
-            ticktext=["Free", "Limited", "Full"],
-            tickfont=dict(size=11, color=FX_DARK),
+            tickvals=[0.0, 0.3, 0.6, 0.8, 1.0],
+            ticktext=["50+ seats", "10–49", "1–9", "RAC/Pooled", "WL/Full"],
+            tickfont=dict(size=10, color=FX_DARK),
             thickness=14,
-            len=0.85,
+            len=0.9,
         ),
         hovertemplate="<b>%{y}</b><br>%{x}<br><b>%{text}</b><extra></extra>",
     ))
@@ -498,7 +531,9 @@ def _chart_heatmap(results: AggregatedResults, cls: str, max_trains: int) -> go.
     fig_h = max(350, len(row_labels) * 26)
     fig.update_layout(
         title=_chart_title(f"{cls} class — Seat Availability Heatmap"),
-        annotations=[_subtitle("Green = available  ·  Yellow = limited  ·  Red = full / waitlisted")],
+        annotations=[_subtitle(
+            "Green=50+ seats  ·  Yellow=1–9  ·  Amber=RAC/Pooled  ·  Red=Waitlisted/Full  ·  Grey=not running"
+        )],
         xaxis=dict(tickangle=-45, tickfont=dict(size=10, color=FX_DARK), **_NO_GRID),
         yaxis=dict(tickfont=dict(size=10, color=FX_DARK), autorange="reversed", **_NO_GRID),
         height=fig_h,
@@ -639,9 +674,12 @@ def render_overview(results: AggregatedResults) -> None:
     st.markdown('<div class="fx-section">📅 Daily Train Count</div>', unsafe_allow_html=True)
     st.plotly_chart(_chart_daily_trains(results.date_wise), use_container_width=True)
     st.caption(
-        "ℹ️ Actual trains running each day per erail.in schedule. "
-        "Differences from IRCTC may be due to quota type (General vs Tatkal), "
-        "boarding-point availability, or erail cache timing (may be a few hours stale)."
+        "ℹ️ **Source:** erail.in schedule (General Quota, cached from IRCTC). "
+        "**Why this may differ from IRCTC:** erail groups nearby stations — e.g. searching "
+        "NDLS also returns trains from ANVT and DLI. IRCTC counts only trains with a stop "
+        "at your exact boarding station. To get IRCTC-matching counts, enter the exact "
+        "station code (e.g. NDLS, not New Delhi). Seasonal specials and very recent "
+        "cancellations may also cause small differences."
     )
 
     with st.expander("📋 See day-by-day train list", expanded=False):
