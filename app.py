@@ -439,13 +439,13 @@ def _chart_weekly(weekly: list[dict]) -> go.Figure:
     fig = make_subplots(specs=[[{"secondary_y": True}]])
     fig.add_trace(go.Bar(
         x=labels, y=trains,
-        name="Total Train-Day Slots",
+        name="Departures",
         marker_color=colors,
         marker_line_color=FX_WHITE, marker_line_width=2,
         text=[f"<b>{v}</b>" for v in trains],
         textposition="outside",
         textfont=dict(size=13, color=FX_DARK),
-        hovertemplate="<b>%{x}</b><br>%{y} train-day slots<extra></extra>",
+        hovertemplate="<b>%{x}</b><br>%{y} total departures<extra></extra>",
     ), secondary_y=False)
 
     if has_occ:
@@ -464,11 +464,11 @@ def _chart_weekly(weekly: list[dict]) -> go.Figure:
 
     fig.update_layout(
         title=_chart_title("Week-by-Week Demand"),
-        annotations=[_subtitle("Total train-day slots per week · colour = demand level")],
+        annotations=[_subtitle("Total departures per week (sum of trains running each day) · colour = demand level")],
         bargap=0.35,
         xaxis=dict(tickangle=-20, showgrid=False, showline=False,
                    tickfont=dict(size=12, color=FX_DARK)),
-        yaxis=dict(title="Total Train-Day Slots", range=[0, _ymax(trains)], **_GRID),
+        yaxis=dict(title="Departures (trains × days)", range=[0, _ymax(trains)], **_GRID),
         yaxis2=dict(title="Avg Occupancy %", range=[0, 130], **_GRID),
         **_PLOTLY_LAYOUT,
     )
@@ -665,7 +665,7 @@ def render_overview(results: AggregatedResults) -> None:
     st.markdown(
         f'<div class="kpi-row">'
         f'  <div class="kpi-card"><div class="kval">{unique}</div><div class="klbl">Unique Trains</div></div>'
-        f'  <div class="kpi-card"><div class="kval">{total_td}</div><div class="klbl">Train-Day Slots</div></div>'
+        f'  <div class="kpi-card"><div class="kval">{total_td}</div><div class="klbl">Total Departures</div></div>'
         f'  <div class="kpi-card"><div class="kval">{days}</div><div class="klbl">Days Covered</div></div>'
         f'</div>',
         unsafe_allow_html=True,
@@ -841,7 +841,7 @@ def render_bus(results: AggregatedResults) -> None:
                 weekly_rows.append({
                     "Week #":             r["week"],
                     "Date Range":         r["date_range"],
-                    "Total Train-Days":   r["total_trains"],
+                    "Total Departures":   r["total_trains"],
                     "Avg Occupancy":      occ_str,
                     "Demand":             r["demand_level"],
                     "Recommended Action": action,
@@ -1043,7 +1043,12 @@ if run_button:
 
     unique = len(results.unique_trains())
     total  = sum(s.count for s in results.date_wise.values())
-    st.success(f"Found **{unique} unique trains** · **{total} train-day slots** over {days} days")
+    avg_per_day = round(total / days, 1) if days else 0
+    st.success(
+        f"Found **{unique} unique trains** on this route · "
+        f"**~{avg_per_day} trains per day** on average · "
+        f"{total} total departures over {days} days"
+    )
 
     tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
         "📊  Overview",
