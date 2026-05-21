@@ -316,10 +316,9 @@ _PLOTLY_LAYOUT = dict(
 _GRID = dict(
     showgrid=True, gridcolor="rgba(0,0,0,0.06)",
     zeroline=True, zerolinecolor="rgba(0,0,0,0.15)", zerolinewidth=1,
-    showline=False, tickfont=dict(size=12, color=FX_DARK),
+    showline=False,
 )
-_NO_GRID = dict(showgrid=False, zeroline=False,
-                showline=False, tickfont=dict(size=12, color=FX_DARK))
+_NO_GRID = dict(showgrid=False, zeroline=False, showline=False)
 
 DEMAND_COLORS = {"High": FX_RED, "Medium": FX_AMBER, "Low": FX_GREEN}
 
@@ -537,8 +536,42 @@ def _chart_pressure_gauge(pressure: dict[str, Optional[float]]) -> go.Figure:
         title=_chart_title("Average Train Occupancy by Day of Week"),
         annotations=[_subtitle("Red ≥70%  ·  Amber 40–69%  ·  Green <40%")],
         xaxis=dict(title="Avg Occupancy %", range=[0, _ymax(vals)], **_GRID),
-        yaxis=dict(tickfont=dict(size=13, color=FX_DARK), **_NO_GRID),
+        yaxis=dict(tickfont=dict(size=13, color=FX_DARK, family="Segoe UI"), **_NO_GRID),
         bargap=0.3,
+        **_PLOTLY_LAYOUT,
+    )
+    return fig
+
+
+def _chart_daily_trains(date_wise: dict) -> go.Figure:
+    """Bar chart of exact train count per date — shows real daily variation, no averaging."""
+    dates  = sorted(date_wise.keys())
+    counts = [date_wise[d].count for d in dates]
+    wdays  = [date_wise[d].weekday for d in dates]
+    colors = [DEMAND_COLORS.get("High", FX_RED) if c >= max(counts) * 0.85
+              else DEMAND_COLORS.get("Medium", FX_AMBER) if c >= max(counts) * 0.5
+              else FX_GREEN for c in counts] if counts else []
+
+    x_labels = [d.strftime("%d %b") for d in dates]
+    hover    = [f"<b>{d.strftime('%d %b %Y')} ({w})</b><br>{c} trains running"
+                for d, c, w in zip(dates, counts, wdays)]
+
+    fig = go.Figure(go.Bar(
+        x=x_labels, y=counts,
+        marker_color=colors,
+        marker_line_color=FX_WHITE, marker_line_width=1,
+        customdata=hover,
+        hovertemplate="%{customdata}<extra></extra>",
+        showlegend=False,
+    ))
+
+    fig.update_layout(
+        title=_chart_title("Daily Train Count — Every Date in Range"),
+        annotations=[_subtitle("Exact trains running each day · no averaging · colour = relative volume")],
+        xaxis=dict(tickangle=-45, tickfont=dict(size=10, color=FX_DARK),
+                   nticks=min(len(dates), 30), showgrid=False),
+        yaxis=dict(title="Trains Running", range=[0, _ymax(counts)], **_GRID),
+        bargap=0.15,
         **_PLOTLY_LAYOUT,
     )
     return fig
@@ -603,7 +636,34 @@ def render_overview(results: AggregatedResults) -> None:
         unsafe_allow_html=True,
     )
 
-    st.markdown('<div class="fx-section">📅 Weekday Demand</div>', unsafe_allow_html=True)
+    st.markdown('<div class="fx-section">📅 Daily Train Count</div>', unsafe_allow_html=True)
+    st.plotly_chart(_chart_daily_trains(results.date_wise), use_container_width=True)
+    st.caption(
+        "ℹ️ Actual trains running each day per erail.in schedule. "
+        "Differences from IRCTC may be due to quota type (General vs Tatkal), "
+        "boarding-point availability, or erail cache timing (may be a few hours stale)."
+    )
+
+    with st.expander("📋 See day-by-day train list", expanded=False):
+        day_rows = []
+        for d in sorted(results.date_wise):
+            s = results.date_wise[d]
+            for t in s.trains:
+                day_rows.append({
+                    "Date":       d.strftime("%d %b %Y"),
+                    "Day":        s.weekday,
+                    "Train No.":  t.train_number,
+                    "Train Name": t.train_name,
+                    "Dep":        t.departure,
+                    "Arr":        t.arrival,
+                    "Duration":   t.duration,
+                })
+        if day_rows:
+            st.dataframe(pd.DataFrame(day_rows), use_container_width=True, hide_index=True)
+        else:
+            st.info("No train data available.")
+
+    st.markdown('<div class="fx-section">📊 Weekday Demand (Averaged)</div>', unsafe_allow_html=True)
     analysis = results.combined_weekday_analysis()
     st.plotly_chart(_chart_weekday_combo(analysis), use_container_width=True)
 
@@ -612,7 +672,7 @@ def render_overview(results: AggregatedResults) -> None:
     st.plotly_chart(_chart_weekly(weekly), use_container_width=True)
 
     # Summary table
-    st.markdown('<div class="fx-section">📋 Summary Table</div>', unsafe_allow_html=True)
+    st.markdown('<div class="fx-section">📋 Weekday Summary Table</div>', unsafe_allow_html=True)
     rows = []
     for r in analysis:
         occ = f"{r['avg_occupancy']}%" if r["avg_occupancy"] is not None else "—"
