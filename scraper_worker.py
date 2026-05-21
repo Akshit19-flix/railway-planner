@@ -90,6 +90,7 @@ def scrape_schedule(from_code: str, to_code: str) -> list[dict]:
 
 def _parse_schedule(body_text: str) -> list[dict]:
     trains = []
+    seen: set[str] = set()          # deduplicate by train number
     lines = [l for l in body_text.splitlines() if l.strip()]
 
     header_idx = -1
@@ -111,12 +112,18 @@ def _parse_schedule(body_text: str) -> list[dict]:
         parts = re.split(r'\t+', line.strip())
         if not parts or not re.match(r'^\d{4,5}$', parts[0].strip()):
             continue
+        train_num = parts[0].strip()
+        if train_num in seen:
+            continue
+        seen.add(train_num)
         try:
             day_values = parts[10:17] if len(parts) > 16 else []
             runs_on = [
                 DAY_COLUMNS[i] for i, v in enumerate(day_values)
                 if v.strip().upper() == "Y"
             ]
+            if not runs_on:
+                runs_on = DAY_COLUMNS[:]
             avail: dict[str, str] = {}
             for ci, cls in enumerate(CLASS_ORDER):
                 col = class_start + ci
@@ -125,7 +132,7 @@ def _parse_schedule(body_text: str) -> list[dict]:
             classes = [cls for cls in CLASS_ORDER if avail[cls] != "—"]
 
             trains.append({
-                "train_number":  parts[0].strip(),
+                "train_number":  train_num,
                 "train_name":    parts[1].strip() if len(parts) > 1 else "",
                 "from_station":  parts[2].strip() if len(parts) > 2 else "",
                 "departure":     parts[3].strip() if len(parts) > 3 else "",

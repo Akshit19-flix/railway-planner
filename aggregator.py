@@ -78,7 +78,15 @@ class AggregatedResults:
             )
             cur += timedelta(days=1)
 
+        # Deduplicate incoming train list by train number before expanding
+        seen_nums: set[str] = set()
+        unique_trains: list[TrainInfo] = []
         for train in trains:
+            if train.train_number not in seen_nums:
+                seen_nums.add(train.train_number)
+                unique_trains.append(train)
+
+        for train in unique_trains:
             running = set(train.runs_on) if train.runs_on else set(WEEKDAY_NAMES)
             for d, summary in self.date_wise.items():
                 if summary.weekday in running:
